@@ -220,6 +220,25 @@ BOOL ParseAICommand(char* buffer, AICommand* cmd) {
     } else {
         cmd->parameters[0] = '\0';
     }
+
+    // Trim trailing whitespace/newlines from command and parameters
+    size_t i;
+    for (i = strlen(cmd->command); i > 0; i--) {
+        char c = cmd->command[i - 1];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            cmd->command[i - 1] = '\0';
+        } else {
+            break;
+        }
+    }
+    for (i = strlen(cmd->parameters); i > 0; i--) {
+        char c = cmd->parameters[i - 1];
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+            cmd->parameters[i - 1] = '\0';
+        } else {
+            break;
+        }
+    }
     
     return TRUE;
 }
