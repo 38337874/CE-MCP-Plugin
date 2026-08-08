@@ -17,6 +17,37 @@
 int selfid;
 ExportedFunctions Exported;
 
+// ── Dynamic Lua bindings ──
+// Load Cheat Engine's own lua53 dll at runtime so the ABI matches CE's modified Lua exactly.
+#ifdef _WIN64
+#define CE_LUA_DLL_NAME "lua53-64.dll"
+#else
+#define CE_LUA_DLL_NAME "lua53-32.dll"
+#endif
+
+static HMODULE g_luaDll = NULL;
+static int (__cdecl *fn_lua_gettop)(lua_State *L) = NULL;
+static const char *(__cdecl *fn_lua_tolstring)(lua_State *L, int idx, size_t *len) = NULL;
+static const char *(__cdecl *fn_lua_pushstring)(lua_State *L, const char *s) = NULL;
+static void (__cdecl *fn_lua_pushcclosure)(lua_State *L, lua_CFunction fn, int n) = NULL;
+static void (__cdecl *fn_lua_setglobal)(lua_State *L, const char *name) = NULL;
+
+static BOOL InitLuaBindings(void) {
+    if (g_luaDll != NULL) return TRUE;
+    g_luaDll = GetModuleHandleA(CE_LUA_DLL_NAME); // CE already loaded it
+    if (g_luaDll == NULL) g_luaDll = LoadLibraryA(CE_LUA_DLL_NAME);
+    if (g_luaDll == NULL) return FALSE;
+    fn_lua_gettop = (int (__cdecl *)(lua_State *))GetProcAddress(g_luaDll, "lua_gettop");
+    fn_lua_tolstring = (const char *(__cdecl *)(lua_State *, int, size_t *))GetProcAddress(g_luaDll, "lua_tolstring");
+    fn_lua_pushstring = (const char *(__cdecl *)(lua_State *, const char *))GetProcAddress(g_luaDll, "lua_pushstring");
+    fn_lua_pushcclosure = (void (__cdecl *)(lua_State *, lua_CFunction, int))GetProcAddress(g_luaDll, "lua_pushcclosure");
+    fn_lua_setglobal = (void (__cdecl *)(lua_State *, const char *))GetProcAddress(g_luaDll, "lua_setglobal");
+    if (fn_lua_gettop && fn_lua_tolstring && fn_lua_pushstring && fn_lua_pushcclosure && fn_lua_setglobal) {
+        return TRUE;
+    }
+    return FALSE;
+}
+
 // AI connection variables
 SOCKET aiSocket = INVALID_SOCKET;
 HANDLE aiThread = NULL;
@@ -1576,14 +1607,18 @@ BOOL __stdcall CEPlugin_GetVersion(PPluginVersion pv, int sizeofpluginversion) {
 
 // Lua function to send command to AI
 int lua_aiSendCommand(lua_State* L) {
-    if (lua_gettop(L) < 1) {
-        lua_pushstring(L, "Error: Missing command parameter");
+    if (!InitLuaBindings()) {
+        lua_pushstring(L, "Error: Lua bindings not initialized");
+        return 1;
+    }
+    if (fn_lua_gettop(L) < 1) {
+        fn_lua_pushstring(L, "Error: Missing command parameter");
         return 1;
     }
     
-    const char* command = lua_tostring(L, 1);
+    const char* command = fn_lua_tolstring(L, 1, NULL);
     if (command == NULL) {
-        lua_pushstring(L, "Error: Invalid command");
+        fn_lua_pushstring(L, "Error: Invalid command");
         return 1;
     }
     
@@ -1592,17 +1627,17 @@ int lua_aiSendCommand(lua_State* L) {
     LeaveCriticalSection(&aiCriticalSection);
     
     if (currentSocket == INVALID_SOCKET) {
-        lua_pushstring(L, "Error: Not connected to AI server");
+        fn_lua_pushstring(L, "Error: Not connected to AI server");
         return 1;
     }
     
     int iResult = send(currentSocket, command, (int)strlen(command), 0);
     if (iResult == SOCKET_ERROR) {
-        lua_pushstring(L, "Error: Failed to send command");
+        fn_lua_pushstring(L, "Error: Failed to send command");
         return 1;
     }
     
-    lua_pushstring(L, "Command sent successfully");
+    fn_lua_pushstring(L, "Command sent successfully");
     return 1;
 }
 
@@ -1632,10 +1667,11 @@ BOOL __stdcall CEPlugin_InitializePlugin(PExportedFunctions ef, int pluginid) {
         return FALSE;
     }
     
-    // Register Lua functions
+    // Register Lua functions (via CE's own lua53 dll, ABI-safe)
     lua_State* lua_state = ef->GetLuaState();
-    if (lua_state != NULL) {
-        lua_register(lua_state, "aiSendCommand", lua_aiSendCommand);
+    if (lua_state != NULL && InitLuaBindings()) {
+        fn_lua_pushcclosure(lua_state, lua_aiSendCommand, 0);
+        fn_lua_setglobal(lua_state, "aiSendCommand");
     }
     // If Lua state is NULL, silently continue without Lua support
     
