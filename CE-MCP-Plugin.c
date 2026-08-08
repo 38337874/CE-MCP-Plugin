@@ -583,9 +583,9 @@ void ExecuteAICommand(AICommand* cmd) {
         char* pidStr = strtok_s(cmd->parameters, ",", &context);
         if (pidStr != NULL) {
             DWORD pid = atoi(pidStr);
-            HANDLE processHandle = Exported.openProcessEx(pid);
-            sprintf_s(message, sizeof(message), "OPEN_PROCESS result: Process ID: %d, Handle: 0x%p", 
-                pid, processHandle);
+            DWORD processHandle = Exported.openProcessEx(pid);
+            sprintf_s(message, sizeof(message), "OPEN_PROCESS result: Process ID: %d, Handle: 0x%lX", 
+                pid, (unsigned long)processHandle);
             Exported.ShowMessage(message);
         } else {
             Exported.ShowMessage("Error: Missing process_id parameter for OPEN_PROCESS");
@@ -672,7 +672,7 @@ void ExecuteAICommand(AICommand* cmd) {
         if (addressStr != NULL) {
             UINT_PTR address = ParseAddress(addressStr);
             DWORD prevAddr = Exported.previousOpcode(address);
-            sprintf_s(message, sizeof(message), "PREVIOUS_OPCODE result: Current: 0x%IX, Previous: 0x%IX", address, prevAddr);
+            sprintf_s(message, sizeof(message), "PREVIOUS_OPCODE result: Current: 0x%IX, Previous: 0x%lX", address, (unsigned long)prevAddr);
             Exported.ShowMessage(message);
         } else {
             Exported.ShowMessage("Error: Missing address parameter for PREVIOUS_OPCODE");
@@ -684,7 +684,7 @@ void ExecuteAICommand(AICommand* cmd) {
         if (addressStr != NULL) {
             UINT_PTR address = ParseAddress(addressStr);
             DWORD nextAddr = Exported.nextOpcode(address);
-            sprintf_s(message, sizeof(message), "NEXT_OPCODE result: Current: 0x%IX, Next: 0x%IX", address, nextAddr);
+            sprintf_s(message, sizeof(message), "NEXT_OPCODE result: Current: 0x%IX, Next: 0x%lX", address, (unsigned long)nextAddr);
             Exported.ShowMessage(message);
         } else {
             Exported.ShowMessage("Error: Missing address parameter for NEXT_OPCODE");
