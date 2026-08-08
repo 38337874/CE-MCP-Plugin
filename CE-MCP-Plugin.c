@@ -64,7 +64,6 @@ static HWND g_statusWnd = NULL;
 static HINSTANCE g_hInst = NULL;
 static int g_cmdCount = 0;
 static int g_connCount = 0;
-int aiServerPort = 8888; // Default AI server port
 
 // AI command structure
 typedef struct {
@@ -1641,7 +1640,7 @@ LRESULT CALLBACK BadgeWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         FillRect(hdc, &rc, bg);
         DeleteObject(bg);
         char buf[80];
-        sprintf_s(buf, sizeof(buf), "CE-MCP: %s", connected ? "已连接" : "未连接");
+        sprintf_s(buf, sizeof(buf), "CE-MCP: %s", connected ? "Connected" : "Disconnected");
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, RGB(255, 255, 255));
         DrawTextA(hdc, buf, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1713,17 +1712,17 @@ void UpdateStatusWindow(void) {
     if (connected) {
         sprintf_s(status, sizeof(status),
             "CE-MCP-Plugin v1.0\r\n\r\n"
-            "状态: 已连接  (server: %s:%d)\r\n"
-            "命令已执行: %d\r\n"
-            "连接次数: %d",
+            "Status: Connected  (server: %s:%d)\r\n"
+            "Commands executed: %d\r\n"
+            "Connection count: %d",
             aiServerIP, aiServerPort, g_cmdCount, g_connCount);
     } else {
         sprintf_s(status, sizeof(status),
             "CE-MCP-Plugin v1.0\r\n\r\n"
-            "状态: 未连接  (server: %s:%d)\r\n"
-            "正在重连...\r\n"
-            "命令已执行: %d\r\n"
-            "连接次数: %d",
+            "Status: Disconnected  (server: %s:%d)\r\n"
+            "Reconnecting...\r\n"
+            "Commands executed: %d\r\n"
+            "Connection count: %d",
             aiServerIP, aiServerPort, g_cmdCount, g_connCount);
     }
     SetDlgItemTextA(g_statusWnd, 200, status);
@@ -1752,9 +1751,9 @@ void ShowStatusWindow(void) {
     if (g_statusWnd) {
         CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
             10, 10, 310, 130, g_statusWnd, (HMENU)200, g_hInst, NULL);
-        CreateWindowExA(0, "BUTTON", "重新连接", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        CreateWindowExA(0, "BUTTON", "Reconnect", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             10, 150, 100, 30, g_statusWnd, (HMENU)100, g_hInst, NULL);
-        CreateWindowExA(0, "BUTTON", "断开连接", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        CreateWindowExA(0, "BUTTON", "Disconnect", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
             120, 150, 100, 30, g_statusWnd, (HMENU)101, g_hInst, NULL);
         UpdateStatusWindow();
         ShowWindow(g_statusWnd, SW_SHOW);
