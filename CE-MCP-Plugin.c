@@ -1535,10 +1535,11 @@ DWORD WINAPI AICommunicationThread(LPVOID lpParam) {
     char recvBuffer[1024];
     int iResult;
     
+        int reconnectCounter = 0;
+
     // Try to connect to AI server
     if (!ConnectToAIServer()) {
-        // Connection failed, but continue running the thread
-        // It will retry when isRunning is TRUE
+        // Connection failed, will retry in the loop below
     }
     
     while (isRunning) {
@@ -1548,9 +1549,20 @@ DWORD WINAPI AICommunicationThread(LPVOID lpParam) {
         LeaveCriticalSection(&aiCriticalSection);
         
         if (currentSocket == INVALID_SOCKET) {
+            // Retry connection every ~1 second so the bridge can start after CE
+            reconnectCounter++;
+            if (reconnectCounter >= 10) {
+                reconnectCounter = 0;
+                if (!ConnectToAIServer()) {
+                    // Failed again, will retry next round
+                } else {
+                    SendResult("CONNECTED");
+                }
+            }
             Sleep(100);
             continue;
         }
+        reconnectCounter = 0;
         
         iResult = recv(currentSocket, recvBuffer, sizeof(recvBuffer) - 1, 0);
         if (iResult > 0) {
