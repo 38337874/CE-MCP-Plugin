@@ -1,4 +1,4 @@
-// CE-MCP-Plugin.c : Defines the entry point for the DLL application.
+﻿// CE-MCP-Plugin.c : Defines the entry point for the DLL application.
 // Cheat Engine MCP (Memory Cheat Plugin) for AI integration
 
 #include <winsock2.h>
@@ -13,11 +13,14 @@
 // Link with Winsock library
 #pragma comment(lib, "ws2_32.lib")
 
+// Forward declaration
+void SendResult(const char* text);
+
 // Plugin global variables
 int selfid;
 ExportedFunctions Exported;
 
-// ── Dynamic Lua bindings ──
+// 鈹€鈹€ Dynamic Lua bindings 鈹€鈹€
 // Load Cheat Engine's own lua53 dll at runtime so the ABI matches CE's modified Lua exactly.
 #ifdef _WIN64
 #define CE_LUA_DLL_NAME "lua53-64.dll"
@@ -67,7 +70,7 @@ BOOL InitWinsock() {
     WSADATA wsaData;
     int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (iResult != 0) {
-        Exported.ShowMessage("WSAStartup failed");
+        SendResult("WSAStartup failed");
         return FALSE;
     }
     return TRUE;
@@ -215,7 +218,7 @@ BOOL ParseAICommand(char* buffer, AICommand* cmd) {
 }
 
 // Execute AI command
-// 辅助函数：解析内存地址
+// 杈呭姪鍑芥暟锛氳В鏋愬唴瀛樺湴鍧€
 UINT_PTR ParseAddress(const char* addressStr) {
     if (addressStr == NULL) {
         return 0;
@@ -223,7 +226,7 @@ UINT_PTR ParseAddress(const char* addressStr) {
     return (UINT_PTR)strtoull(addressStr, NULL, 16);
 }
 
-// 辅助函数：读取内存
+// 杈呭姪鍑芥暟锛氳鍙栧唴瀛?
 BOOL ReadMemory(UINT_PTR address, char* type, void* buffer) {
     if (Exported.ReadProcessMemory == NULL) {
         return FALSE;
@@ -245,10 +248,10 @@ BOOL ReadMemory(UINT_PTR address, char* type, void* buffer) {
     } else if (strcmp(type, "int64") == 0 || strcmp(type, "INT64") == 0) {
         result = (*Exported.ReadProcessMemory)(*Exported.OpenedProcessHandle, (LPCVOID)address, buffer, 8, &bytesRead);
     } else if (strcmp(type, "string") == 0 || strcmp(type, "STRING") == 0) {
-        // 读取字符串，最多256字节
+        // 璇诲彇瀛楃涓诧紝鏈€澶?56瀛楄妭
         result = (*Exported.ReadProcessMemory)(*Exported.OpenedProcessHandle, (LPCVOID)address, buffer, 256, &bytesRead);
         if (result) {
-            // 确保字符串以null结尾
+            // 纭繚瀛楃涓蹭互null缁撳熬
             ((char*)buffer)[255] = '\0';
         }
     }
@@ -256,13 +259,13 @@ BOOL ReadMemory(UINT_PTR address, char* type, void* buffer) {
     return result && bytesRead > 0;
 }
 
-// 辅助函数：写入内存
+// 杈呭姪鍑芥暟锛氬啓鍏ュ唴瀛?
 BOOL WriteMemory(UINT_PTR address, const char* valueStr, const char* type) {
     if (Exported.WriteProcessMemory == NULL) {
         return FALSE;
     }
     
-    // 定义WriteProcessMemory函数指针类型
+    // 瀹氫箟WriteProcessMemory鍑芥暟鎸囬拡绫诲瀷
     typedef BOOL(__stdcall *WriteProcessMemoryFunc)(HANDLE hProcess, LPVOID lpBaseAddress, LPCVOID lpBuffer, SIZE_T nSize, SIZE_T* lpNumberOfBytesWritten);
     WriteProcessMemoryFunc writeMem = (WriteProcessMemoryFunc)Exported.WriteProcessMemory;
     
@@ -288,35 +291,47 @@ BOOL WriteMemory(UINT_PTR address, const char* valueStr, const char* type) {
         INT64 value = _strtoi64(valueStr, NULL, 0);
         result = writeMem(*Exported.OpenedProcessHandle, (LPVOID)address, &value, 8, &bytesWritten);
     } else if (strcmp(type, "string") == 0 || strcmp(type, "STRING") == 0) {
-        // 写入字符串
+        // 鍐欏叆瀛楃涓?
         result = writeMem(*Exported.OpenedProcessHandle, (LPVOID)address, valueStr, strlen(valueStr) + 1, &bytesWritten);
     }
     
     return result && bytesWritten > 0;
 }
 
+// Send command result back to the AI server over the socket
+void SendResult(const char* text) {
+    if (text == NULL) return;
+    EnterCriticalSection(&aiCriticalSection);
+    SOCKET s = aiSocket;
+    LeaveCriticalSection(&aiCriticalSection);
+    if (s == INVALID_SOCKET) return;
+    char buf[1100];
+    sprintf_s(buf, sizeof(buf), "%s\r\n", text);
+    send(s, buf, (int)strlen(buf), 0);
+}
 void ExecuteAICommand(AICommand* cmd) {
     char message[1024];
     
     if (strcmp(cmd->command, "SHOW_MESSAGE") == 0) {
         Exported.ShowMessage(cmd->parameters);
+        SendResult(cmd->parameters);
     } else if (strcmp(cmd->command, "AUTO_ASSEMBLE") == 0) {
         BOOL result = Exported.AutoAssemble(cmd->parameters);
         sprintf_s(message, sizeof(message), "AutoAssemble result: %d", result);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "SPEEDHACK") == 0) {
         float speed = strtof(cmd->parameters, NULL);
         BOOL result = Exported.speedhack_setSpeed(speed);
         sprintf_s(message, sizeof(message), "SpeedHack result: %d, Speed: %.2f", result, speed);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "PAUSE_PROCESS") == 0) {
         Exported.pause();
-        Exported.ShowMessage("Process paused");
+        SendResult("Process paused");
     } else if (strcmp(cmd->command, "UNPAUSE_PROCESS") == 0) {
         Exported.unpause();
-        Exported.ShowMessage("Process unpaused");
+        SendResult("Process unpaused");
     } else if (strcmp(cmd->command, "WRITE_MEMORY") == 0) {
-        // 格式：WRITE_MEMORY:address,value,type
+        // 鏍煎紡锛歐RITE_MEMORY:address,value,type
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -328,18 +343,18 @@ void ExecuteAICommand(AICommand* cmd) {
                     BOOL result = WriteMemory(address, valueStr, typeStr);
                     sprintf_s(message, sizeof(message), "WriteMemory result: %d, Address: 0x%IX, Value: %s, Type: %s", 
                         result, address, valueStr, typeStr);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing type parameter for WRITE_MEMORY");
+                    SendResult("Error: Missing type parameter for WRITE_MEMORY");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing value parameter for WRITE_MEMORY");
+                SendResult("Error: Missing value parameter for WRITE_MEMORY");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for WRITE_MEMORY");
+            SendResult("Error: Missing address parameter for WRITE_MEMORY");
         }
     } else if (strcmp(cmd->command, "READ_MEMORY") == 0) {
-        // 格式：READ_MEMORY:address,type
+        // 鏍煎紡锛歊EAD_MEMORY:address,type
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -374,32 +389,32 @@ void ExecuteAICommand(AICommand* cmd) {
                         sprintf_s(message, sizeof(message), "ReadMemory result: %d, Address: 0x%IX, Type: %s, Raw Value: %s", 
                             result, address, typeStr, buffer);
                     }
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
                     sprintf_s(message, sizeof(message), "ReadMemory failed for Address: 0x%IX, Type: %s", address, typeStr);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 }
             } else {
-                Exported.ShowMessage("Error: Missing type parameter for READ_MEMORY");
+                SendResult("Error: Missing type parameter for READ_MEMORY");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for READ_MEMORY");
+            SendResult("Error: Missing address parameter for READ_MEMORY");
         }
     } else if (strcmp(cmd->command, "ASSEMBLE") == 0) {
-        // 格式：ASSEMBLE:address,instruction
+        // 鏍煎紡锛欰SSEMBLE:address,instruction
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
             char* instruction = strtok_s(NULL, ",", &context);
             if (instruction != NULL) {
                 UINT_PTR address = ParseAddress(addressStr);
-                BYTE output[16]; // 最大支持16字节指令
+                BYTE output[16]; // 鏈€澶ф敮鎸?6瀛楄妭鎸囦护
                 int returnedSize;
                 BOOL result = Exported.Assembler(address, instruction, output, sizeof(output), &returnedSize);
                 if (result) {
                     sprintf_s(message, sizeof(message), "ASSEMBLE result: %d, Address: 0x%IX, Instruction: %s\nMachine Code: ", 
                         result, address, instruction);
-                    // 格式化机器码
+                    // 鏍煎紡鍖栨満鍣ㄧ爜
                     char machineCode[64] = {0};
                     size_t machineCodeLen = 0;
                     for (int i = 0; i < returnedSize && machineCodeLen < sizeof(machineCode) - 3; i++) {
@@ -407,19 +422,19 @@ void ExecuteAICommand(AICommand* cmd) {
                         machineCodeLen = strlen(machineCode);
                     }
                     strcat_s(message, sizeof(message), machineCode);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
                     sprintf_s(message, sizeof(message), "ASSEMBLE failed: Address: 0x%IX, Instruction: %s", address, instruction);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 }
             } else {
-                Exported.ShowMessage("Error: Missing instruction parameter for ASSEMBLE");
+                SendResult("Error: Missing instruction parameter for ASSEMBLE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for ASSEMBLE");
+            SendResult("Error: Missing address parameter for ASSEMBLE");
         }
     } else if (strcmp(cmd->command, "DISASSEMBLE") == 0) {
-        // 格式：DISASSEMBLE:address
+        // 鏍煎紡锛欴ISASSEMBLE:address
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -429,17 +444,17 @@ void ExecuteAICommand(AICommand* cmd) {
             if (result) {
                 sprintf_s(message, sizeof(message), "DISASSEMBLE result: %d, Address: 0x%IX\nInstruction: %s", 
                     result, address, output);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
                 sprintf_s(message, sizeof(message), "DISASSEMBLE failed: Address: 0x%IX", address);
-                Exported.ShowMessage(message);
+                SendResult(message);
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for DISASSEMBLE");
+            SendResult("Error: Missing address parameter for DISASSEMBLE");
         }
     } else if (strcmp(cmd->command, "DISASSEMBLE_EX") == 0) {
-        // 格式：DISASSEMBLE_EX:address
-        // 使用增强的反汇编功能，提供更详细的指令信息
+        // 鏍煎紡锛欴ISASSEMBLE_EX:address
+        // 浣跨敤澧炲己鐨勫弽姹囩紪鍔熻兘锛屾彁渚涙洿璇︾粏鐨勬寚浠や俊鎭?
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -449,16 +464,16 @@ void ExecuteAICommand(AICommand* cmd) {
             if (result) {
                 sprintf_s(message, sizeof(message), "DISASSEMBLE_EX result: %d, Address: 0x%IX\nInstruction: %s", 
                     result, address, output);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
                 sprintf_s(message, sizeof(message), "DISASSEMBLE_EX failed: Address: 0x%IX", address);
-                Exported.ShowMessage(message);
+                SendResult(message);
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for DISASSEMBLE_EX");
+            SendResult("Error: Missing address parameter for DISASSEMBLE_EX");
         }
     } else if (strcmp(cmd->command, "CHANGE_REGISTER") == 0) {
-        // 格式：CHANGE_REGISTER:address,register_name,value
+        // 鏍煎紡锛欳HANGE_REGISTER:address,register_name,value
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -469,12 +484,12 @@ void ExecuteAICommand(AICommand* cmd) {
                     UINT_PTR address = ParseAddress(addressStr);
                     UINT_PTR value = ParseAddress(valueStr);
                     
-                    // 初始化寄存器修改结构体
+                    // 鍒濆鍖栧瘎瀛樺櫒淇敼缁撴瀯浣?
                     REGISTERMODIFICATIONINFO changereg;
                     ZeroMemory(&changereg, sizeof(changereg));
                     changereg.address = address;
                     
-                    // 设置要修改的寄存器
+                    // 璁剧疆瑕佷慨鏀圭殑瀵勫瓨鍣?
                     BOOL regSet = FALSE;
                     if (strcmp(regName, "eax") == 0 || strcmp(regName, "EAX") == 0) {
                         changereg.change_eax = TRUE;
@@ -518,22 +533,22 @@ void ExecuteAICommand(AICommand* cmd) {
                         BOOL result = Exported.ChangeRegistersAtAddress(address, &changereg);
                         sprintf_s(message, sizeof(message), "CHANGE_REGISTER result: %d, Address: 0x%IX, Register: %s, Value: 0x%IX", 
                             result, address, regName, value);
-                        Exported.ShowMessage(message);
+                        SendResult(message);
                     } else {
                         sprintf_s(message, sizeof(message), "CHANGE_REGISTER failed: Invalid register name: %s", regName);
-                        Exported.ShowMessage(message);
+                        SendResult(message);
                     }
                 } else {
-                    Exported.ShowMessage("Error: Missing value parameter for CHANGE_REGISTER");
+                    SendResult("Error: Missing value parameter for CHANGE_REGISTER");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing register_name parameter for CHANGE_REGISTER");
+                SendResult("Error: Missing register_name parameter for CHANGE_REGISTER");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for CHANGE_REGISTER");
+            SendResult("Error: Missing address parameter for CHANGE_REGISTER");
         }
     } else if (strcmp(cmd->command, "INJECT_DLL") == 0) {
-        // 格式：INJECT_DLL:dll_path,optional_function_name
+        // 鏍煎紡锛欼NJECT_DLL:dll_path,optional_function_name
         char* context = NULL;
         char* dllPath = strtok_s(cmd->parameters, ",", &context);
         if (dllPath != NULL) {
@@ -545,12 +560,12 @@ void ExecuteAICommand(AICommand* cmd) {
             BOOL result = Exported.InjectDLL(dllPath, funcName);
             sprintf_s(message, sizeof(message), "INJECT_DLL result: %d, DLL Path: %s, Function: %s", 
                 result, dllPath, funcName);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing dll_path parameter for INJECT_DLL");
+            SendResult("Error: Missing dll_path parameter for INJECT_DLL");
         }
     } else if (strcmp(cmd->command, "FREEZE_MEMORY") == 0) {
-        // 格式：FREEZE_MEMORY:address,size
+        // 鏍煎紡锛欶REEZE_MEMORY:address,size
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -562,32 +577,32 @@ void ExecuteAICommand(AICommand* cmd) {
                 int freezeID = Exported.FreezeMem(address, size);
                 sprintf_s(message, sizeof(message), "FREEZE_MEMORY result: freezeID = %d, Address: 0x%IX, Size: %d", 
                     freezeID, address, size);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing size parameter for FREEZE_MEMORY");
+                SendResult("Error: Missing size parameter for FREEZE_MEMORY");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for FREEZE_MEMORY");
+            SendResult("Error: Missing address parameter for FREEZE_MEMORY");
         }
     } else if (strcmp(cmd->command, "UNFREEZE_MEMORY") == 0) {
-        // 格式：UNFREEZE_MEMORY:freeze_id
+        // 鏍煎紡锛歎NFREEZE_MEMORY:freeze_id
         char* context = NULL;
         char* freezeIDStr = strtok_s(cmd->parameters, ",", &context);
         if (freezeIDStr != NULL) {
             int freezeID = atoi(freezeIDStr);
             BOOL result = Exported.UnfreezeMem(freezeID);
             sprintf_s(message, sizeof(message), "UNFREEZE_MEMORY result: %d, FreezeID: %d", result, freezeID);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing freeze_id parameter for UNFREEZE_MEMORY");
+            SendResult("Error: Missing freeze_id parameter for UNFREEZE_MEMORY");
         }
     } else if (strcmp(cmd->command, "FIX_MEMORY") == 0) {
-        // 格式：FIX_MEMORY
+        // 鏍煎紡锛欶IX_MEMORY
         BOOL result = Exported.FixMem();
         sprintf_s(message, sizeof(message), "FIX_MEMORY result: %d", result);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "PROCESS_LIST") == 0) {
-        // 格式：PROCESS_LIST
+        // 鏍煎紡锛歅ROCESS_LIST
         char listBuffer[4096];
         BOOL result = Exported.ProcessList(listBuffer, sizeof(listBuffer));
         if (result) {
@@ -595,21 +610,21 @@ void ExecuteAICommand(AICommand* cmd) {
         } else {
             sprintf_s(message, sizeof(message), "PROCESS_LIST failed: result = %d", result);
         }
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "GET_PROCESS_ID") == 0) {
-        // 格式：GET_PROCESS_ID:process_name
+        // 鏍煎紡锛欸ET_PROCESS_ID:process_name
         char* context = NULL;
         char* processName = strtok_s(cmd->parameters, ",", &context);
         if (processName != NULL) {
             DWORD processID = Exported.getProcessIDFromProcessName(processName);
             sprintf_s(message, sizeof(message), "GET_PROCESS_ID result: Process Name: %s, Process ID: %d", 
                 processName, processID);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing process_name parameter for GET_PROCESS_ID");
+            SendResult("Error: Missing process_name parameter for GET_PROCESS_ID");
         }
     } else if (strcmp(cmd->command, "OPEN_PROCESS") == 0) {
-        // 格式：OPEN_PROCESS:process_id
+        // 鏍煎紡锛歄PEN_PROCESS:process_id
         char* context = NULL;
         char* pidStr = strtok_s(cmd->parameters, ",", &context);
         if (pidStr != NULL) {
@@ -617,12 +632,12 @@ void ExecuteAICommand(AICommand* cmd) {
             DWORD processHandle = Exported.openProcessEx(pid);
             sprintf_s(message, sizeof(message), "OPEN_PROCESS result: Process ID: %d, Handle: 0x%lX", 
                 pid, (unsigned long)processHandle);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing process_id parameter for OPEN_PROCESS");
+            SendResult("Error: Missing process_id parameter for OPEN_PROCESS");
         }
     } else if (strcmp(cmd->command, "GET_ADDRESS_FROM_POINTER") == 0) {
-        // 格式：GET_ADDRESS_FROM_POINTER:base_address,offset_count,offset1,offset2,...
+        // 鏍煎紡锛欸ET_ADDRESS_FROM_POINTER:base_address,offset_count,offset1,offset2,...
         char* context = NULL;
         char* baseAddrStr = strtok_s(cmd->parameters, ",", &context);
         if (baseAddrStr != NULL) {
@@ -650,21 +665,21 @@ void ExecuteAICommand(AICommand* cmd) {
                         UINT_PTR finalAddress = Exported.GetAddressFromPointer(baseAddress, offsetCount, offsets);
                         sprintf_s(message, sizeof(message), "GET_ADDRESS_FROM_POINTER result: Base: 0x%IX, Final: 0x%IX", 
                             baseAddress, finalAddress);
-                        Exported.ShowMessage(message);
+                        SendResult(message);
                     } else {
-                        Exported.ShowMessage("Error: Invalid offset parameters for GET_ADDRESS_FROM_POINTER");
+                        SendResult("Error: Invalid offset parameters for GET_ADDRESS_FROM_POINTER");
                     }
                 } else {
-                    Exported.ShowMessage("Error: Invalid offset count for GET_ADDRESS_FROM_POINTER (1-16)");
+                    SendResult("Error: Invalid offset count for GET_ADDRESS_FROM_POINTER (1-16)");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing offset_count parameter for GET_ADDRESS_FROM_POINTER");
+                SendResult("Error: Missing offset_count parameter for GET_ADDRESS_FROM_POINTER");
             }
         } else {
-            Exported.ShowMessage("Error: Missing base_address parameter for GET_ADDRESS_FROM_POINTER");
+            SendResult("Error: Missing base_address parameter for GET_ADDRESS_FROM_POINTER");
         }
     } else if (strcmp(cmd->command, "ADDRESS_TO_NAME") == 0) {
-        // 格式：ADDRESS_TO_NAME:address
+        // 鏍煎紡锛欰DDRESS_TO_NAME:address
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -676,12 +691,12 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "ADDRESS_TO_NAME result: Address: 0x%IX, Name: <not found>", address);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for ADDRESS_TO_NAME");
+            SendResult("Error: Missing address parameter for ADDRESS_TO_NAME");
         }
     } else if (strcmp(cmd->command, "NAME_TO_ADDRESS") == 0) {
-        // 格式：NAME_TO_ADDRESS:name
+        // 鏍煎紡锛歂AME_TO_ADDRESS:name
         char* context = NULL;
         char* name = strtok_s(cmd->parameters, ",", &context);
         if (name != NULL) {
@@ -692,36 +707,36 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "NAME_TO_ADDRESS result: Name: %s, Address: <not found>", name);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing name parameter for NAME_TO_ADDRESS");
+            SendResult("Error: Missing name parameter for NAME_TO_ADDRESS");
         }
     } else if (strcmp(cmd->command, "PREVIOUS_OPCODE") == 0) {
-        // 格式：PREVIOUS_OPCODE:address
+        // 鏍煎紡锛歅REVIOUS_OPCODE:address
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
             UINT_PTR address = ParseAddress(addressStr);
             DWORD prevAddr = Exported.previousOpcode(address);
             sprintf_s(message, sizeof(message), "PREVIOUS_OPCODE result: Current: 0x%IX, Previous: 0x%lX", address, (unsigned long)prevAddr);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for PREVIOUS_OPCODE");
+            SendResult("Error: Missing address parameter for PREVIOUS_OPCODE");
         }
     } else if (strcmp(cmd->command, "NEXT_OPCODE") == 0) {
-        // 格式：NEXT_OPCODE:address
+        // 鏍煎紡锛歂EXT_OPCODE:address
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
             UINT_PTR address = ParseAddress(addressStr);
             DWORD nextAddr = Exported.nextOpcode(address);
             sprintf_s(message, sizeof(message), "NEXT_OPCODE result: Current: 0x%IX, Next: 0x%lX", address, (unsigned long)nextAddr);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for NEXT_OPCODE");
+            SendResult("Error: Missing address parameter for NEXT_OPCODE");
         }
     } else if (strcmp(cmd->command, "SET_BREAKPOINT") == 0) {
-        // 格式：SET_BREAKPOINT:address,size,trigger
+        // 鏍煎紡锛歋ET_BREAKPOINT:address,size,trigger
         // trigger: 0=execute, 1=write, 2=read
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
@@ -737,30 +752,30 @@ void ExecuteAICommand(AICommand* cmd) {
                     BOOL result = Exported.debug_setBreakpoint(address, size, trigger);
                     sprintf_s(message, sizeof(message), "SET_BREAKPOINT result: %d, Address: 0x%IX, Size: %d, Trigger: %d", 
                         result, address, size, trigger);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing trigger parameter for SET_BREAKPOINT");
+                    SendResult("Error: Missing trigger parameter for SET_BREAKPOINT");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing size parameter for SET_BREAKPOINT");
+                SendResult("Error: Missing size parameter for SET_BREAKPOINT");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for SET_BREAKPOINT");
+            SendResult("Error: Missing address parameter for SET_BREAKPOINT");
         }
     } else if (strcmp(cmd->command, "REMOVE_BREAKPOINT") == 0) {
-        // 格式：REMOVE_BREAKPOINT:address
+        // 鏍煎紡锛歊EMOVE_BREAKPOINT:address
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
             UINT_PTR address = ParseAddress(addressStr);
             BOOL result = Exported.debug_removeBreakpoint(address);
             sprintf_s(message, sizeof(message), "REMOVE_BREAKPOINT result: %d, Address: 0x%IX", result, address);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for REMOVE_BREAKPOINT");
+            SendResult("Error: Missing address parameter for REMOVE_BREAKPOINT");
         }
     } else if (strcmp(cmd->command, "CONTINUE_FROM_BREAKPOINT") == 0) {
-        // 格式：CONTINUE_FROM_BREAKPOINT:continue_option
+        // 鏍煎紡锛欳ONTINUE_FROM_BREAKPOINT:continue_option
         // continue_option: 0=run, 1=step into, 2=step over, 3=step to return
         char* context = NULL;
         char* optionStr = strtok_s(cmd->parameters, ",", &context);
@@ -768,28 +783,28 @@ void ExecuteAICommand(AICommand* cmd) {
             int option = atoi(optionStr);
             BOOL result = Exported.debug_continueFromBreakpoint(option);
             sprintf_s(message, sizeof(message), "CONTINUE_FROM_BREAKPOINT result: %d, Option: %d", result, option);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing continue_option parameter for CONTINUE_FROM_BREAKPOINT");
+            SendResult("Error: Missing continue_option parameter for CONTINUE_FROM_BREAKPOINT");
         }
     } else if (strcmp(cmd->command, "CREATE_TABLE_ENTRY") == 0) {
-        // 格式：CREATE_TABLE_ENTRY
+        // 鏍煎紡锛欳REATE_TABLE_ENTRY
         PVOID memrec = Exported.createTableEntry();
         sprintf_s(message, sizeof(message), "CREATE_TABLE_ENTRY result: MemRec pointer = 0x%p", memrec);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "GET_TABLE_ENTRY") == 0) {
-        // 格式：GET_TABLE_ENTRY:description
+        // 鏍煎紡锛欸ET_TABLE_ENTRY:description
         char* context = NULL;
         char* description = strtok_s(cmd->parameters, ",", &context);
         if (description != NULL) {
             PVOID memrec = Exported.getTableEntry(description);
             sprintf_s(message, sizeof(message), "GET_TABLE_ENTRY result: Description = %s, MemRec pointer = 0x%p", description, memrec);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing description parameter for GET_TABLE_ENTRY");
+            SendResult("Error: Missing description parameter for GET_TABLE_ENTRY");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETDESCRIPTION") == 0) {
-        // 格式：MEMREC_SETDESCRIPTION:memrec_pointer,description
+        // 鏍煎紡锛歁EMREC_SETDESCRIPTION:memrec_pointer,description
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -798,27 +813,27 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID memrec = (PVOID)ParseAddress(memrecStr);
                 BOOL result = Exported.memrec_setDescription(memrec, description);
                 sprintf_s(message, sizeof(message), "MEMREC_SETDESCRIPTION result: %d, MemRec: 0x%p, Description: %s", result, memrec, description);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing description parameter for MEMREC_SETDESCRIPTION");
+                SendResult("Error: Missing description parameter for MEMREC_SETDESCRIPTION");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETDESCRIPTION");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETDESCRIPTION");
         }
     } else if (strcmp(cmd->command, "MEMREC_GETDESCRIPTION") == 0) {
-        // 格式：MEMREC_GETDESCRIPTION:memrec_pointer
+        // 鏍煎紡锛歁EMREC_GETDESCRIPTION:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             char* description = Exported.memrec_getDescription(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_GETDESCRIPTION result: MemRec: 0x%p, Description: %s", memrec, description ? description : "<null>");
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_GETDESCRIPTION");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_GETDESCRIPTION");
         }
     } else if (strcmp(cmd->command, "MEMREC_GETADDRESS") == 0) {
-        // 格式：MEMREC_GETADDRESS:memrec_pointer
+        // 鏍煎紡锛歁EMREC_GETADDRESS:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -832,12 +847,12 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "MEMREC_GETADDRESS failed: MemRec: 0x%p", memrec);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_GETADDRESS");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_GETADDRESS");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETADDRESS") == 0) {
-        // 格式：MEMREC_SETADDRESS:memrec_pointer,address,offset_count,offset1,offset2,...
+        // 鏍煎紡锛歁EMREC_SETADDRESS:memrec_pointer,address,offset_count,offset1,offset2,...
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -860,33 +875,33 @@ void ExecuteAICommand(AICommand* cmd) {
                         
                         BOOL result = Exported.memrec_setAddress(memrec, addressStr, offsets, offsetCount);
                         sprintf_s(message, sizeof(message), "MEMREC_SETADDRESS result: %d, MemRec: 0x%p, Address: 0x%IX, Offset count: %d", result, memrec, address, offsetCount);
-                        Exported.ShowMessage(message);
+                        SendResult(message);
                     } else {
-                        Exported.ShowMessage("Error: Invalid offset count for MEMREC_SETADDRESS (0-16)");
+                        SendResult("Error: Invalid offset count for MEMREC_SETADDRESS (0-16)");
                     }
                 } else {
-                    Exported.ShowMessage("Error: Missing offset_count parameter for MEMREC_SETADDRESS");
+                    SendResult("Error: Missing offset_count parameter for MEMREC_SETADDRESS");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing address parameter for MEMREC_SETADDRESS");
+                SendResult("Error: Missing address parameter for MEMREC_SETADDRESS");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETADDRESS");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETADDRESS");
         }
     } else if (strcmp(cmd->command, "MEMREC_GETTYPE") == 0) {
-        // 格式：MEMREC_GETTYPE:memrec_pointer
+        // 鏍煎紡锛歁EMREC_GETTYPE:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             int vtype = Exported.memrec_getType(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_GETTYPE result: MemRec: 0x%p, Type: %d", memrec, vtype);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_GETTYPE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_GETTYPE");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETTYPE") == 0) {
-        // 格式：MEMREC_SETTYPE:memrec_pointer,vtype
+        // 鏍煎紡锛歁EMREC_SETTYPE:memrec_pointer,vtype
         // vtype: 0=byte, 1=word, 2=dword, 3=float, 4=double, 5=bit, 6=int64, 7=string
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
@@ -897,15 +912,15 @@ void ExecuteAICommand(AICommand* cmd) {
                 int vtype = atoi(vtypeStr);
                 BOOL result = Exported.memrec_setType(memrec, vtype);
                 sprintf_s(message, sizeof(message), "MEMREC_SETTYPE result: %d, MemRec: 0x%p, Type: %d", result, memrec, vtype);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing vtype parameter for MEMREC_SETTYPE");
+                SendResult("Error: Missing vtype parameter for MEMREC_SETTYPE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETTYPE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETTYPE");
         }
     } else if (strcmp(cmd->command, "MEMREC_GETVALUE") == 0) {
-        // 格式：MEMREC_GETVALUE:memrec_pointer
+        // 鏍煎紡锛歁EMREC_GETVALUE:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -917,12 +932,12 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "MEMREC_GETVALUE failed: MemRec: 0x%p", memrec);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_GETVALUE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_GETVALUE");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETVALUE") == 0) {
-        // 格式：MEMREC_SETVALUE:memrec_pointer,value
+        // 鏍煎紡锛歁EMREC_SETVALUE:memrec_pointer,value
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -931,27 +946,27 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID memrec = (PVOID)ParseAddress(memrecStr);
                 BOOL result = Exported.memrec_setValue(memrec, value);
                 sprintf_s(message, sizeof(message), "MEMREC_SETVALUE result: %d, MemRec: 0x%p, Value: %s", result, memrec, value);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing value parameter for MEMREC_SETVALUE");
+                SendResult("Error: Missing value parameter for MEMREC_SETVALUE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETVALUE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETVALUE");
         }
     } else if (strcmp(cmd->command, "MEMREC_GETSCRIPT") == 0) {
-        // 格式：MEMREC_GETSCRIPT:memrec_pointer
+        // 鏍煎紡锛歁EMREC_GETSCRIPT:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             char* script = Exported.memrec_getScript(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_GETSCRIPT result: MemRec: 0x%p, Script: %s", memrec, script ? script : "<null>");
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_GETSCRIPT");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_GETSCRIPT");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETSCRIPT") == 0) {
-        // 格式：MEMREC_SETSCRIPT:memrec_pointer,script
+        // 鏍煎紡锛歁EMREC_SETSCRIPT:memrec_pointer,script
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -960,27 +975,27 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID memrec = (PVOID)ParseAddress(memrecStr);
                 BOOL result = Exported.memrec_setScript(memrec, script);
                 sprintf_s(message, sizeof(message), "MEMREC_SETSCRIPT result: %d, MemRec: 0x%p", result, memrec);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing script parameter for MEMREC_SETSCRIPT");
+                SendResult("Error: Missing script parameter for MEMREC_SETSCRIPT");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETSCRIPT");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETSCRIPT");
         }
     } else if (strcmp(cmd->command, "MEMREC_ISFROZEN") == 0) {
-        // 格式：MEMREC_ISFROZEN:memrec_pointer
+        // 鏍煎紡锛歁EMREC_ISFROZEN:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             BOOL isFrozen = Exported.memrec_isfrozen(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_ISFROZEN result: MemRec: 0x%p, IsFrozen: %d", memrec, isFrozen);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_ISFROZEN");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_ISFROZEN");
         }
     } else if (strcmp(cmd->command, "MEMREC_FREEZE") == 0) {
-        // 格式：MEMREC_FREEZE:memrec_pointer,direction
+        // 鏍煎紡锛歁EMREC_FREEZE:memrec_pointer,direction
         // direction: 0=frozen, 1=increase, 2=decrease
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
@@ -991,27 +1006,27 @@ void ExecuteAICommand(AICommand* cmd) {
                 int direction = atoi(directionStr);
                 BOOL result = Exported.memrec_freeze(memrec, direction);
                 sprintf_s(message, sizeof(message), "MEMREC_FREEZE result: %d, MemRec: 0x%p, Direction: %d", result, memrec, direction);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing direction parameter for MEMREC_FREEZE");
+                SendResult("Error: Missing direction parameter for MEMREC_FREEZE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_FREEZE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_FREEZE");
         }
     } else if (strcmp(cmd->command, "MEMREC_UNFREEZE") == 0) {
-        // 格式：MEMREC_UNFREEZE:memrec_pointer
+        // 鏍煎紡锛歁EMREC_UNFREEZE:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             BOOL result = Exported.memrec_unfreeze(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_UNFREEZE result: %d, MemRec: 0x%p", result, memrec);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_UNFREEZE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_UNFREEZE");
         }
     } else if (strcmp(cmd->command, "MEMREC_SETCOLOR") == 0) {
-        // 格式：MEMREC_SETCOLOR:memrec_pointer,color
+        // 鏍煎紡锛歁EMREC_SETCOLOR:memrec_pointer,color
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
@@ -1021,15 +1036,15 @@ void ExecuteAICommand(AICommand* cmd) {
                 DWORD color = (DWORD)strtol(colorStr, NULL, 0);
                 BOOL result = Exported.memrec_setColor(memrec, color);
                 sprintf_s(message, sizeof(message), "MEMREC_SETCOLOR result: %d, MemRec: 0x%p, Color: 0x%08X", result, memrec, color);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing color parameter for MEMREC_SETCOLOR");
+                SendResult("Error: Missing color parameter for MEMREC_SETCOLOR");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_SETCOLOR");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_SETCOLOR");
         }
     } else if (strcmp(cmd->command, "MEMREC_APPENDTOENTRY") == 0) {
-        // 格式：MEMREC_APPENDTOENTRY:memrec_pointer1,memrec_pointer2
+        // 鏍煎紡锛歁EMREC_APPENDTOENTRY:memrec_pointer1,memrec_pointer2
         char* context = NULL;
         char* memrecStr1 = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr1 != NULL) {
@@ -1039,47 +1054,47 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID memrec2 = (PVOID)ParseAddress(memrecStr2);
                 BOOL result = Exported.memrec_appendtoentry(memrec1, memrec2);
                 sprintf_s(message, sizeof(message), "MEMREC_APPENDTOENTRY result: %d, MemRec1: 0x%p, MemRec2: 0x%p", result, memrec1, memrec2);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing memrec_pointer2 parameter for MEMREC_APPENDTOENTRY");
+                SendResult("Error: Missing memrec_pointer2 parameter for MEMREC_APPENDTOENTRY");
             }
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer1 parameter for MEMREC_APPENDTOENTRY");
+            SendResult("Error: Missing memrec_pointer1 parameter for MEMREC_APPENDTOENTRY");
         }
     } else if (strcmp(cmd->command, "MEMREC_DELETE") == 0) {
-        // 格式：MEMREC_DELETE:memrec_pointer
+        // 鏍煎紡锛歁EMREC_DELETE:memrec_pointer
         char* context = NULL;
         char* memrecStr = strtok_s(cmd->parameters, ",", &context);
         if (memrecStr != NULL) {
             PVOID memrec = (PVOID)ParseAddress(memrecStr);
             BOOL result = Exported.memrec_delete(memrec);
             sprintf_s(message, sizeof(message), "MEMREC_DELETE result: %d, MemRec: 0x%p", result, memrec);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing memrec_pointer parameter for MEMREC_DELETE");
+            SendResult("Error: Missing memrec_pointer parameter for MEMREC_DELETE");
         }
     } else if (strcmp(cmd->command, "CLOSE_CE") == 0) {
-        // 格式：CLOSE_CE
+        // 鏍煎紡锛欳LOSE_CE
         Exported.closeCE();
         sprintf_s(message, sizeof(message), "CLOSE_CE executed");
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "HIDE_ALL_CE_WINDOWS") == 0) {
-        // 格式：HIDE_ALL_CE_WINDOWS
+        // 鏍煎紡锛欻IDE_ALL_CE_WINDOWS
         Exported.hideAllCEWindows();
         sprintf_s(message, sizeof(message), "HIDE_ALL_CE_WINDOWS executed");
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "UNHIDE_MAIN_CE_WINDOW") == 0) {
-        // 格式：UNHIDE_MAIN_CE_WINDOW
+        // 鏍煎紡锛歎NHIDE_MAIN_CE_WINDOW
         Exported.unhideMainCEwindow();
         sprintf_s(message, sizeof(message), "UNHIDE_MAIN_CE_WINDOW executed");
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "GET_MAIN_WINDOW_HANDLE") == 0) {
-        // 格式：GET_MAIN_WINDOW_HANDLE
+        // 鏍煎紡锛欸ET_MAIN_WINDOW_HANDLE
         HANDLE hwnd = Exported.GetMainWindowHandle();
         sprintf_s(message, sizeof(message), "GET_MAIN_WINDOW_HANDLE result: HWND = 0x%p", hwnd);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "MESSAGE_DIALOG") == 0) {
-        // 格式：MESSAGE_DIALOG:message,messagetype,buttoncombination
+        // 鏍煎紡锛歁ESSAGE_DIALOG:message,messagetype,buttoncombination
         // messagetype: 0=mtWarning, 1=mtError, 2=mtInformation, 3=mtConfirmation
         // buttoncombination: 0=mbOK, 1=mbOKCancel, 2=mbYesNo, 3=mbYesNoCancel
         char* context = NULL;
@@ -1093,18 +1108,18 @@ void ExecuteAICommand(AICommand* cmd) {
                     int btnCombo = atoi(btnComboStr);
                     int result = Exported.messageDialog(msgText, msgType, btnCombo);
                     sprintf_s(message, sizeof(message), "MESSAGE_DIALOG result: %d, Message: %s, Type: %d, Buttons: %d", result, msgText, msgType, btnCombo);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing buttoncombination parameter for MESSAGE_DIALOG");
+                    SendResult("Error: Missing buttoncombination parameter for MESSAGE_DIALOG");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing messagetype parameter for MESSAGE_DIALOG");
+                SendResult("Error: Missing messagetype parameter for MESSAGE_DIALOG");
             }
         } else {
-            Exported.ShowMessage("Error: Missing message parameter for MESSAGE_DIALOG");
+            SendResult("Error: Missing message parameter for MESSAGE_DIALOG");
         }
     } else if (strcmp(cmd->command, "LOAD_MODULE") == 0) {
-        // 格式：LOAD_MODULE:module_path
+        // 鏍煎紡锛歀OAD_MODULE:module_path
         char* context = NULL;
         char* modulePath = strtok_s(cmd->parameters, ",", &context);
         if (modulePath != NULL) {
@@ -1116,12 +1131,12 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "LOAD_MODULE failed: Module: %s", modulePath);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing module_path parameter for LOAD_MODULE");
+            SendResult("Error: Missing module_path parameter for LOAD_MODULE");
         }
     } else if (strcmp(cmd->command, "GENERATE_API_HOOK_SCRIPT") == 0) {
-        // 格式：GENERATE_API_HOOK_SCRIPT:address,addresstojumpto,addresstogetnewcalladdress
+        // 鏍煎紡锛欸ENERATE_API_HOOK_SCRIPT:address,addresstojumpto,addresstogetnewcalladdress
         char* context = NULL;
         char* addressStr = strtok_s(cmd->parameters, ",", &context);
         if (addressStr != NULL) {
@@ -1136,18 +1151,18 @@ void ExecuteAICommand(AICommand* cmd) {
                     } else {
                         sprintf_s(message, sizeof(message), "GENERATE_API_HOOK_SCRIPT failed: Address: %s", addressStr);
                     }
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing addresstogetnewcalladdress parameter for GENERATE_API_HOOK_SCRIPT");
+                    SendResult("Error: Missing addresstogetnewcalladdress parameter for GENERATE_API_HOOK_SCRIPT");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing addresstojumpto parameter for GENERATE_API_HOOK_SCRIPT");
+                SendResult("Error: Missing addresstojumpto parameter for GENERATE_API_HOOK_SCRIPT");
             }
         } else {
-            Exported.ShowMessage("Error: Missing address parameter for GENERATE_API_HOOK_SCRIPT");
+            SendResult("Error: Missing address parameter for GENERATE_API_HOOK_SCRIPT");
         }
     } else if (strcmp(cmd->command, "DEBUG_PROCESS") == 0) {
-        // 格式：DEBUG_PROCESS:debuggerinterface
+        // 鏍煎紡锛欴EBUG_PROCESS:debuggerinterface
         // debuggerinterface: 0=windows debugger, 1=veh debugger, 2=kernel debugger
         char* context = NULL;
         char* debuggerInterfaceStr = strtok_s(cmd->parameters, ",", &context);
@@ -1155,99 +1170,99 @@ void ExecuteAICommand(AICommand* cmd) {
             int debuggerInterface = atoi(debuggerInterfaceStr);
             DWORD result = Exported.debugProcessEx(debuggerInterface);
             sprintf_s(message, sizeof(message), "DEBUG_PROCESS result: %d, Debugger Interface: %d", result, debuggerInterface);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing debuggerinterface parameter for DEBUG_PROCESS");
+            SendResult("Error: Missing debuggerinterface parameter for DEBUG_PROCESS");
         }
     } else if (strcmp(cmd->command, "AA_ADD_COMMAND") == 0) {
-        // 格式：AA_ADD_COMMAND:command
+        // 鏍煎紡锛欰A_ADD_COMMAND:command
         char* context = NULL;
         char* command = strtok_s(cmd->parameters, ",", &context);
         if (command != NULL) {
             Exported.aa_AddExtraCommand(command);
             sprintf_s(message, sizeof(message), "AA_ADD_COMMAND executed: %s", command);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing command parameter for AA_ADD_COMMAND");
+            SendResult("Error: Missing command parameter for AA_ADD_COMMAND");
         }
     } else if (strcmp(cmd->command, "AA_DEL_COMMAND") == 0) {
-        // 格式：AA_DEL_COMMAND:command
+        // 鏍煎紡锛欰A_DEL_COMMAND:command
         char* context = NULL;
         char* command = strtok_s(cmd->parameters, ",", &context);
         if (command != NULL) {
             Exported.aa_RemoveExtraCommand(command);
             sprintf_s(message, sizeof(message), "AA_DEL_COMMAND executed: %s", command);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing command parameter for AA_DEL_COMMAND");
+            SendResult("Error: Missing command parameter for AA_DEL_COMMAND");
         }
     } else if (strcmp(cmd->command, "CREATE_FORM") == 0) {
-        // 格式：CREATE_FORM
+        // 鏍煎紡锛欳REATE_FORM
         PVOID form = Exported.createForm();
         sprintf_s(message, sizeof(message), "CREATE_FORM result: Form pointer = 0x%p", form);
-        Exported.ShowMessage(message);
+        SendResult(message);
     } else if (strcmp(cmd->command, "CREATE_PANEL") == 0) {
-        // 格式：CREATE_PANEL:owner_pointer
+        // 鏍煎紡锛欳REATE_PANEL:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID panel = Exported.createPanel(owner);
             sprintf_s(message, sizeof(message), "CREATE_PANEL result: Owner: 0x%p, Panel pointer = 0x%p", owner, panel);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_PANEL");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_PANEL");
         }
     } else if (strcmp(cmd->command, "CREATE_LABEL") == 0) {
-        // 格式：CREATE_LABEL:owner_pointer
+        // 鏍煎紡锛欳REATE_LABEL:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID label = Exported.createLabel(owner);
             sprintf_s(message, sizeof(message), "CREATE_LABEL result: Owner: 0x%p, Label pointer = 0x%p", owner, label);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_LABEL");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_LABEL");
         }
     } else if (strcmp(cmd->command, "CREATE_EDIT") == 0) {
-        // 格式：CREATE_EDIT:owner_pointer
+        // 鏍煎紡锛欳REATE_EDIT:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID edit = Exported.createEdit(owner);
             sprintf_s(message, sizeof(message), "CREATE_EDIT result: Owner: 0x%p, Edit pointer = 0x%p", owner, edit);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_EDIT");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_EDIT");
         }
     } else if (strcmp(cmd->command, "CREATE_BUTTON") == 0) {
-        // 格式：CREATE_BUTTON:owner_pointer
+        // 鏍煎紡锛欳REATE_BUTTON:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID button = Exported.createButton(owner);
             sprintf_s(message, sizeof(message), "CREATE_BUTTON result: Owner: 0x%p, Button pointer = 0x%p", owner, button);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_BUTTON");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_BUTTON");
         }
     } else if (strcmp(cmd->command, "CREATE_IMAGE") == 0) {
-        // 格式：CREATE_IMAGE:owner_pointer
+        // 鏍煎紡锛欳REATE_IMAGE:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID image = Exported.createImage(owner);
             sprintf_s(message, sizeof(message), "CREATE_IMAGE result: Owner: 0x%p, Image pointer = 0x%p", owner, image);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_IMAGE");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_IMAGE");
         }
     } else if (strcmp(cmd->command, "SET_CAPTION") == 0) {
-        // 格式：SET_CAPTION:control_pointer,caption
+        // 鏍煎紡锛歋ET_CAPTION:control_pointer,caption
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1256,15 +1271,15 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID control = (PVOID)ParseAddress(controlStr);
                 Exported.control_setCaption(control, caption);
                 sprintf_s(message, sizeof(message), "SET_CAPTION executed: Control: 0x%p, Caption: %s", control, caption);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing caption parameter for SET_CAPTION");
+                SendResult("Error: Missing caption parameter for SET_CAPTION");
             }
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for SET_CAPTION");
+            SendResult("Error: Missing control_pointer parameter for SET_CAPTION");
         }
     } else if (strcmp(cmd->command, "GET_CAPTION") == 0) {
-        // 格式：GET_CAPTION:control_pointer
+        // 鏍煎紡锛欸ET_CAPTION:control_pointer
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1276,12 +1291,12 @@ void ExecuteAICommand(AICommand* cmd) {
             } else {
                 sprintf_s(message, sizeof(message), "GET_CAPTION failed: Control: 0x%p", control);
             }
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for GET_CAPTION");
+            SendResult("Error: Missing control_pointer parameter for GET_CAPTION");
         }
     } else if (strcmp(cmd->command, "SET_POSITION") == 0) {
-        // 格式：SET_POSITION:control_pointer,x,y
+        // 鏍煎紡锛歋ET_POSITION:control_pointer,x,y
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1294,18 +1309,18 @@ void ExecuteAICommand(AICommand* cmd) {
                     int y = atoi(yStr);
                     Exported.control_setPosition(control, x, y);
                     sprintf_s(message, sizeof(message), "SET_POSITION executed: Control: 0x%p, X: %d, Y: %d", control, x, y);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing y parameter for SET_POSITION");
+                    SendResult("Error: Missing y parameter for SET_POSITION");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing x parameter for SET_POSITION");
+                SendResult("Error: Missing x parameter for SET_POSITION");
             }
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for SET_POSITION");
+            SendResult("Error: Missing control_pointer parameter for SET_POSITION");
         }
     } else if (strcmp(cmd->command, "GET_POSITION") == 0) {
-        // 格式：GET_POSITION:control_pointer
+        // 鏍煎紡锛欸ET_POSITION:control_pointer
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1313,12 +1328,12 @@ void ExecuteAICommand(AICommand* cmd) {
             int x = Exported.control_getX(control);
             int y = Exported.control_getY(control);
             sprintf_s(message, sizeof(message), "GET_POSITION result: Control: 0x%p, X: %d, Y: %d", control, x, y);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for GET_POSITION");
+            SendResult("Error: Missing control_pointer parameter for GET_POSITION");
         }
     } else if (strcmp(cmd->command, "SET_SIZE") == 0) {
-        // 格式：SET_SIZE:control_pointer,width,height
+        // 鏍煎紡锛歋ET_SIZE:control_pointer,width,height
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1331,18 +1346,18 @@ void ExecuteAICommand(AICommand* cmd) {
                     int height = atoi(heightStr);
                     Exported.control_setSize(control, width, height);
                     sprintf_s(message, sizeof(message), "SET_SIZE executed: Control: 0x%p, Width: %d, Height: %d", control, width, height);
-                    Exported.ShowMessage(message);
+                    SendResult(message);
                 } else {
-                    Exported.ShowMessage("Error: Missing height parameter for SET_SIZE");
+                    SendResult("Error: Missing height parameter for SET_SIZE");
                 }
             } else {
-                Exported.ShowMessage("Error: Missing width parameter for SET_SIZE");
+                SendResult("Error: Missing width parameter for SET_SIZE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for SET_SIZE");
+            SendResult("Error: Missing control_pointer parameter for SET_SIZE");
         }
     } else if (strcmp(cmd->command, "GET_SIZE") == 0) {
-        // 格式：GET_SIZE:control_pointer
+        // 鏍煎紡锛欸ET_SIZE:control_pointer
         char* context = NULL;
         char* controlStr = strtok_s(cmd->parameters, ",", &context);
         if (controlStr != NULL) {
@@ -1350,60 +1365,60 @@ void ExecuteAICommand(AICommand* cmd) {
             int width = Exported.control_getWidth(control);
             int height = Exported.control_getHeight(control);
             sprintf_s(message, sizeof(message), "GET_SIZE result: Control: 0x%p, Width: %d, Height: %d", control, width, height);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing control_pointer parameter for GET_SIZE");
+            SendResult("Error: Missing control_pointer parameter for GET_SIZE");
         }
     } else if (strcmp(cmd->command, "DESTROY_OBJECT") == 0) {
-        // 格式：DESTROY_OBJECT:object_pointer
+        // 鏍煎紡锛欴ESTROY_OBJECT:object_pointer
         char* context = NULL;
         char* objectStr = strtok_s(cmd->parameters, ",", &context);
         if (objectStr != NULL) {
             PVOID object = (PVOID)ParseAddress(objectStr);
             Exported.object_destroy(object);
             sprintf_s(message, sizeof(message), "DESTROY_OBJECT executed: Object: 0x%p", object);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing object_pointer parameter for DESTROY_OBJECT");
+            SendResult("Error: Missing object_pointer parameter for DESTROY_OBJECT");
         }
     } else if (strcmp(cmd->command, "FORM_CENTER_SCREEN") == 0) {
-        // 格式：FORM_CENTER_SCREEN:form_pointer
+        // 鏍煎紡锛欶ORM_CENTER_SCREEN:form_pointer
         char* context = NULL;
         char* formStr = strtok_s(cmd->parameters, ",", &context);
         if (formStr != NULL) {
             PVOID form = (PVOID)ParseAddress(formStr);
             Exported.form_centerScreen(form);
             sprintf_s(message, sizeof(message), "FORM_CENTER_SCREEN executed: Form: 0x%p", form);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing form_pointer parameter for FORM_CENTER_SCREEN");
+            SendResult("Error: Missing form_pointer parameter for FORM_CENTER_SCREEN");
         }
     } else if (strcmp(cmd->command, "FORM_HIDE") == 0) {
-        // 格式：FORM_HIDE:form_pointer
+        // 鏍煎紡锛欶ORM_HIDE:form_pointer
         char* context = NULL;
         char* formStr = strtok_s(cmd->parameters, ",", &context);
         if (formStr != NULL) {
             PVOID form = (PVOID)ParseAddress(formStr);
             Exported.form_hide(form);
             sprintf_s(message, sizeof(message), "FORM_HIDE executed: Form: 0x%p", form);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing form_pointer parameter for FORM_HIDE");
+            SendResult("Error: Missing form_pointer parameter for FORM_HIDE");
         }
     } else if (strcmp(cmd->command, "FORM_SHOW") == 0) {
-        // 格式：FORM_SHOW:form_pointer
+        // 鏍煎紡锛欶ORM_SHOW:form_pointer
         char* context = NULL;
         char* formStr = strtok_s(cmd->parameters, ",", &context);
         if (formStr != NULL) {
             PVOID form = (PVOID)ParseAddress(formStr);
             Exported.form_show(form);
             sprintf_s(message, sizeof(message), "FORM_SHOW executed: Form: 0x%p", form);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing form_pointer parameter for FORM_SHOW");
+            SendResult("Error: Missing form_pointer parameter for FORM_SHOW");
         }
     } else if (strcmp(cmd->command, "IMAGE_LOAD_IMAGE_FROM_FILE") == 0) {
-        // 格式：IMAGE_LOAD_IMAGE_FROM_FILE:image_pointer,filename
+        // 鏍煎紡锛欼MAGE_LOAD_IMAGE_FROM_FILE:image_pointer,filename
         char* context = NULL;
         char* imageStr = strtok_s(cmd->parameters, ",", &context);
         if (imageStr != NULL) {
@@ -1412,15 +1427,15 @@ void ExecuteAICommand(AICommand* cmd) {
                 PVOID image = (PVOID)ParseAddress(imageStr);
                 BOOL result = Exported.image_loadImageFromFile(image, filename);
                 sprintf_s(message, sizeof(message), "IMAGE_LOAD_IMAGE_FROM_FILE result: %d, Image: 0x%p, Filename: %s", result, image, filename);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing filename parameter for IMAGE_LOAD_IMAGE_FROM_FILE");
+                SendResult("Error: Missing filename parameter for IMAGE_LOAD_IMAGE_FROM_FILE");
             }
         } else {
-            Exported.ShowMessage("Error: Missing image_pointer parameter for IMAGE_LOAD_IMAGE_FROM_FILE");
+            SendResult("Error: Missing image_pointer parameter for IMAGE_LOAD_IMAGE_FROM_FILE");
         }
     } else if (strcmp(cmd->command, "IMAGE_TRANSPARENT") == 0) {
-        // 格式：IMAGE_TRANSPARENT:image_pointer,transparent
+        // 鏍煎紡锛欼MAGE_TRANSPARENT:image_pointer,transparent
         char* context = NULL;
         char* imageStr = strtok_s(cmd->parameters, ",", &context);
         if (imageStr != NULL) {
@@ -1430,15 +1445,15 @@ void ExecuteAICommand(AICommand* cmd) {
                 BOOL transparent = (atoi(transparentStr) != 0);
                 Exported.image_transparent(image, transparent);
                 sprintf_s(message, sizeof(message), "IMAGE_TRANSPARENT executed: Image: 0x%p, Transparent: %d", image, transparent);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing transparent parameter for IMAGE_TRANSPARENT");
+                SendResult("Error: Missing transparent parameter for IMAGE_TRANSPARENT");
             }
         } else {
-            Exported.ShowMessage("Error: Missing image_pointer parameter for IMAGE_TRANSPARENT");
+            SendResult("Error: Missing image_pointer parameter for IMAGE_TRANSPARENT");
         }
     } else if (strcmp(cmd->command, "IMAGE_STRETCH") == 0) {
-        // 格式：IMAGE_STRETCH:image_pointer,stretch
+        // 鏍煎紡锛欼MAGE_STRETCH:image_pointer,stretch
         char* context = NULL;
         char* imageStr = strtok_s(cmd->parameters, ",", &context);
         if (imageStr != NULL) {
@@ -1448,27 +1463,27 @@ void ExecuteAICommand(AICommand* cmd) {
                 BOOL stretch = (atoi(stretchStr) != 0);
                 Exported.image_stretch(image, stretch);
                 sprintf_s(message, sizeof(message), "IMAGE_STRETCH executed: Image: 0x%p, Stretch: %d", image, stretch);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing stretch parameter for IMAGE_STRETCH");
+                SendResult("Error: Missing stretch parameter for IMAGE_STRETCH");
             }
         } else {
-            Exported.ShowMessage("Error: Missing image_pointer parameter for IMAGE_STRETCH");
+            SendResult("Error: Missing image_pointer parameter for IMAGE_STRETCH");
         }
     } else if (strcmp(cmd->command, "CREATE_TIMER") == 0) {
-        // 格式：CREATE_TIMER:owner_pointer
+        // 鏍煎紡锛欳REATE_TIMER:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID timer = Exported.createTimer(owner);
             sprintf_s(message, sizeof(message), "CREATE_TIMER result: Owner: 0x%p, Timer pointer = 0x%p", owner, timer);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_TIMER");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_TIMER");
         }
     } else if (strcmp(cmd->command, "TIMER_SET_INTERVAL") == 0) {
-        // 格式：TIMER_SET_INTERVAL:timer_pointer,interval
+        // 鏍煎紡锛歍IMER_SET_INTERVAL:timer_pointer,interval
         char* context = NULL;
         char* timerStr = strtok_s(cmd->parameters, ",", &context);
         if (timerStr != NULL) {
@@ -1478,40 +1493,40 @@ void ExecuteAICommand(AICommand* cmd) {
                 int interval = atoi(intervalStr);
                 Exported.timer_setInterval(timer, interval);
                 sprintf_s(message, sizeof(message), "TIMER_SET_INTERVAL executed: Timer: 0x%p, Interval: %d ms", timer, interval);
-                Exported.ShowMessage(message);
+                SendResult(message);
             } else {
-                Exported.ShowMessage("Error: Missing interval parameter for TIMER_SET_INTERVAL");
+                SendResult("Error: Missing interval parameter for TIMER_SET_INTERVAL");
             }
         } else {
-            Exported.ShowMessage("Error: Missing timer_pointer parameter for TIMER_SET_INTERVAL");
+            SendResult("Error: Missing timer_pointer parameter for TIMER_SET_INTERVAL");
         }
     } else if (strcmp(cmd->command, "CREATE_MEMO") == 0) {
-        // 格式：CREATE_MEMO:owner_pointer
+        // 鏍煎紡锛欳REATE_MEMO:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID memo = Exported.createMemo(owner);
             sprintf_s(message, sizeof(message), "CREATE_MEMO result: Owner: 0x%p, Memo pointer = 0x%p", owner, memo);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_MEMO");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_MEMO");
         }
     } else if (strcmp(cmd->command, "CREATE_GROUP_BOX") == 0) {
-        // 格式：CREATE_GROUP_BOX:owner_pointer
+        // 鏍煎紡锛欳REATE_GROUP_BOX:owner_pointer
         char* context = NULL;
         char* ownerStr = strtok_s(cmd->parameters, ",", &context);
         if (ownerStr != NULL) {
             PVOID owner = (PVOID)ParseAddress(ownerStr);
             PVOID groupbox = Exported.createGroupBox(owner);
             sprintf_s(message, sizeof(message), "CREATE_GROUP_BOX result: Owner: 0x%p, GroupBox pointer = 0x%p", owner, groupbox);
-            Exported.ShowMessage(message);
+            SendResult(message);
         } else {
-            Exported.ShowMessage("Error: Missing owner_pointer parameter for CREATE_GROUP_BOX");
+            SendResult("Error: Missing owner_pointer parameter for CREATE_GROUP_BOX");
         }
     } else {
         sprintf_s(message, sizeof(message), "Unknown command: %s", cmd->command);
-        Exported.ShowMessage(message);
+        SendResult(message);
     }
 }
 
@@ -1572,7 +1587,7 @@ DWORD WINAPI AICommunicationThread(LPVOID lpParam) {
 
 // Main menu plugin callback
 void __stdcall mainmenuplugin(void) {
-    Exported.ShowMessage("CE-MCP-Plugin Main Menu");
+    SendResult("CE-MCP-Plugin Main Menu");
     return;
 }
 
