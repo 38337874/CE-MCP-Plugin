@@ -1606,6 +1606,72 @@ DWORD WINAPI AICommunicationThread(LPVOID lpParam) {
     return 0;
 }
 
+// ── Connection badge (always visible on CE main window bottom bar) ──
+#define IDT_BADGE 0xBADC0DE
+static HWND g_badgeWnd = NULL;
+
+void UpdateBadgePosition(void) {
+    if (!g_badgeWnd) return;
+    HWND parent = GetParent(g_badgeWnd);
+    if (!parent) return;
+    RECT rc;
+    if (!GetClientRect(parent, &rc)) return;
+    // Sit above/over the left edge of the status bar area
+    SetWindowPos(g_badgeWnd, NULL, 4, rc.bottom - 26, 170, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+LRESULT CALLBACK BadgeWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE:
+        SetTimer(hWnd, IDT_BADGE, 500, NULL);
+        return 0;
+    case WM_TIMER:
+        UpdateBadgePosition();
+        InvalidateRect(hWnd, NULL, TRUE);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        EnterCriticalSection(&aiCriticalSection);
+        BOOL connected = (aiSocket != INVALID_SOCKET);
+        LeaveCriticalSection(&aiCriticalSection);
+        HBRUSH bg = CreateSolidBrush(connected ? RGB(0, 130, 50) : RGB(150, 50, 0));
+        FillRect(hdc, &rc, bg);
+        DeleteObject(bg);
+        char buf[80];
+        sprintf_s(buf, sizeof(buf), "CE-MCP: %s", connected ? "已连接" : "未连接");
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(255, 255, 255));
+        DrawTextA(hdc, buf, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        KillTimer(hWnd, IDT_BADGE);
+        g_badgeWnd = NULL;
+        return 0;
+    }
+    return DefWindowProcA(hWnd, msg, wParam, lParam);
+}
+
+void CreateConnectionBadge(void) {
+    if (g_badgeWnd) return;
+    HWND ceMain = Exported.GetMainWindowHandle();
+    if (!ceMain) return;
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = BadgeWndProc;
+    wc.hInstance = g_hInst;
+    wc.lpszClassName = "CEMCPBadgeWindow";
+    RegisterClassA(&wc);
+    g_badgeWnd = CreateWindowExA(0, "CEMCPBadgeWindow", NULL,
+        WS_CHILD | WS_VISIBLE,
+        4, 0, 170, 22, ceMain, NULL, g_hInst, NULL);
+    UpdateBadgePosition();
+}
+
 // ── Status window ──
 void UpdateStatusWindow(void);
 
@@ -1813,10 +1879,15 @@ BOOL __stdcall CEPlugin_InitializePlugin(PExportedFunctions ef, int pluginid) {
     }
     
     // Plugin enabled successfully - silent, no UI message to avoid blocking
+    CreateConnectionBadge();
     return TRUE;
 }
 
 BOOL __stdcall CEPlugin_DisablePlugin(void) {
+    if (g_badgeWnd) {
+        DestroyWindow(g_badgeWnd);
+        g_badgeWnd = NULL;
+    }
     // Stop AI communication thread
     EnterCriticalSection(&aiCriticalSection);
     isRunning = FALSE;
