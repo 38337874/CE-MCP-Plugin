@@ -59,6 +59,13 @@ CRITICAL_SECTION aiCriticalSection; // Critical section for thread synchronizati
 char aiServerIP[16] = "127.0.0.1"; // Default AI server IP
 int aiServerPort = 8888; // Default AI server port
 
+// Status window
+static HWND g_statusWnd = NULL;
+static HINSTANCE g_hInst = NULL;
+static int g_cmdCount = 0;
+static int g_connCount = 0;
+int aiServerPort = 8888; // Default AI server port
+
 // AI command structure
 typedef struct {
     char command[64];
@@ -180,6 +187,7 @@ BOOL ConnectToAIServer() {
         return FALSE;
     }
 
+    g_connCount++;
     // Success - but don't show message to avoid blocking
     return TRUE;
 }
@@ -311,6 +319,7 @@ void SendResult(const char* text) {
 }
 void ExecuteAICommand(AICommand* cmd) {
     char message[1024];
+    g_cmdCount++;
     
     if (strcmp(cmd->command, "SHOW_MESSAGE") == 0) {
         Exported.ShowMessage(cmd->parameters);
@@ -1597,15 +1606,105 @@ DWORD WINAPI AICommunicationThread(LPVOID lpParam) {
     return 0;
 }
 
+// ── Status window ──
+void UpdateStatusWindow(void);
+
+LRESULT CALLBACK StatusWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_CREATE:
+        SetTimer(hWnd, 1, 500, NULL);
+        return 0;
+    case WM_TIMER:
+        UpdateStatusWindow();
+        return 0;
+    case WM_COMMAND:
+        if (LOWORD(wParam) == 100) { // Reconnect button
+            DisconnectFromAIServer();
+            ConnectToAIServer();
+        } else if (LOWORD(wParam) == 101) { // Disconnect button
+            DisconnectFromAIServer();
+        }
+        return 0;
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_DESTROY:
+        KillTimer(hWnd, 1);
+        g_statusWnd = NULL;
+        return 0;
+    }
+    return DefWindowProcA(hWnd, msg, wParam, lParam);
+}
+
+void UpdateStatusWindow(void) {
+    if (!g_statusWnd || !IsWindow(g_statusWnd)) return;
+
+    char status[1024];
+    EnterCriticalSection(&aiCriticalSection);
+    BOOL connected = (aiSocket != INVALID_SOCKET);
+    LeaveCriticalSection(&aiCriticalSection);
+
+    if (connected) {
+        sprintf_s(status, sizeof(status),
+            "CE-MCP-Plugin v1.0\r\n\r\n"
+            "状态: 已连接  (server: %s:%d)\r\n"
+            "命令已执行: %d\r\n"
+            "连接次数: %d",
+            aiServerIP, aiServerPort, g_cmdCount, g_connCount);
+    } else {
+        sprintf_s(status, sizeof(status),
+            "CE-MCP-Plugin v1.0\r\n\r\n"
+            "状态: 未连接  (server: %s:%d)\r\n"
+            "正在重连...\r\n"
+            "命令已执行: %d\r\n"
+            "连接次数: %d",
+            aiServerIP, aiServerPort, g_cmdCount, g_connCount);
+    }
+    SetDlgItemTextA(g_statusWnd, 200, status);
+}
+
+void ShowStatusWindow(void) {
+    if (g_statusWnd && IsWindow(g_statusWnd)) {
+        ShowWindow(g_statusWnd, SW_SHOW);
+        SetForegroundWindow(g_statusWnd);
+        return;
+    }
+
+    WNDCLASSA wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = StatusWndProc;
+    wc.hInstance = g_hInst;
+    wc.lpszClassName = "CEMCPStatusWindow";
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    RegisterClassA(&wc);
+
+    g_statusWnd = CreateWindowExA(0, "CEMCPStatusWindow", "CE-MCP-Plugin Status",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT, CW_USEDEFAULT, 340, 230,
+        NULL, NULL, g_hInst, NULL);
+
+    if (g_statusWnd) {
+        CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
+            10, 10, 310, 130, g_statusWnd, (HMENU)200, g_hInst, NULL);
+        CreateWindowExA(0, "BUTTON", "重新连接", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            10, 150, 100, 30, g_statusWnd, (HMENU)100, g_hInst, NULL);
+        CreateWindowExA(0, "BUTTON", "断开连接", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+            120, 150, 100, 30, g_statusWnd, (HMENU)101, g_hInst, NULL);
+        UpdateStatusWindow();
+        ShowWindow(g_statusWnd, SW_SHOW);
+    }
+}
+
 // Main menu plugin callback
 void __stdcall mainmenuplugin(void) {
-    SendResult("CE-MCP-Plugin Main Menu");
+    ShowStatusWindow();
     return;
 }
 
     BOOL APIENTRY DllMain(HINSTANCE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH:
+            g_hInst = hModule;
             // Initialize Winsock when DLL is loaded
             InitWinsock();
             // Note: Critical section will be initialized in CEPlugin_InitializePlugin
