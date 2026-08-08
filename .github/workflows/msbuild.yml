@@ -50,8 +50,12 @@ jobs:
       shell: pwsh
       run: |
         $workspace = $env:GITHUB_WORKSPACE
-        # vcxproj expects libs at $(MSBuildProjectDirectory)\libs, i.e. <repo>/CE-MCP-Plugin/libs
-        $libsDir = Join-Path $workspace 'CE-MCP-Plugin\libs'
+        # Locate the project file dynamically (checkout structure varies), then place libs next to it
+        $projFile = Get-ChildItem -Path $workspace -Recurse -Filter 'CE-MCP-Plugin.vcxproj' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $projFile) { Write-Error 'CE-MCP-Plugin.vcxproj not found under workspace'; exit 1 }
+        $libsDir = Join-Path $projFile.DirectoryName 'libs'
+        Write-Host "Project dir: $($projFile.DirectoryName)"
+        Write-Host "Libs dir: $libsDir"
         $luaSrcDir = Join-Path $env:RUNNER_TEMP 'lua-5.3.6'
         $luaSrcZip = Join-Path $env:RUNNER_TEMP 'lua-5.3.6.tar.gz'
 
