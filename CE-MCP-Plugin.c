@@ -1608,7 +1608,7 @@ BOOL __stdcall CEPlugin_GetVersion(PPluginVersion pv, int sizeofpluginversion) {
 // Lua function to send command to AI
 int lua_aiSendCommand(lua_State* L) {
     if (!InitLuaBindings()) {
-        lua_pushstring(L, "Error: Lua bindings not initialized");
+        fn_lua_pushstring(L, "Error: Lua bindings not initialized");
         return 1;
     }
     if (fn_lua_gettop(L) < 1) {
