@@ -34,6 +34,9 @@ static const char *(__cdecl *fn_lua_tolstring)(lua_State *L, int idx, size_t *le
 static const char *(__cdecl *fn_lua_pushstring)(lua_State *L, const char *s) = NULL;
 static void (__cdecl *fn_lua_pushcclosure)(lua_State *L, lua_CFunction fn, int n) = NULL;
 static void (__cdecl *fn_lua_setglobal)(lua_State *L, const char *name) = NULL;
+static void (__cdecl *fn_lua_settop)(lua_State *L, int idx) = NULL;
+static int (__cdecl *fn_luaL_loadstring)(lua_State *L, const char *s) = NULL;
+static int (__cdecl *fn_lua_pcallk)(lua_State *L, int nargs, int nresults, int errfunc, lua_KContext ctx, lua_KFunction k) = NULL;
 
 static BOOL InitLuaBindings(void) {
     if (g_luaDll != NULL) return TRUE;
@@ -45,7 +48,11 @@ static BOOL InitLuaBindings(void) {
     fn_lua_pushstring = (const char *(__cdecl *)(lua_State *, const char *))GetProcAddress(g_luaDll, "lua_pushstring");
     fn_lua_pushcclosure = (void (__cdecl *)(lua_State *, lua_CFunction, int))GetProcAddress(g_luaDll, "lua_pushcclosure");
     fn_lua_setglobal = (void (__cdecl *)(lua_State *, const char *))GetProcAddress(g_luaDll, "lua_setglobal");
-    if (fn_lua_gettop && fn_lua_tolstring && fn_lua_pushstring && fn_lua_pushcclosure && fn_lua_setglobal) {
+    fn_lua_settop = (void (__cdecl *)(lua_State *, int))GetProcAddress(g_luaDll, "lua_settop");
+    fn_luaL_loadstring = (int (__cdecl *)(lua_State *, const char *))GetProcAddress(g_luaDll, "luaL_loadstring");
+    fn_lua_pcallk = (int (__cdecl *)(lua_State *, int, int, int, lua_KContext, lua_KFunction))GetProcAddress(g_luaDll, "lua_pcallk");
+    if (fn_lua_gettop && fn_lua_tolstring && fn_lua_pushstring && fn_lua_pushcclosure && fn_lua_setglobal
+        && fn_lua_settop && fn_luaL_loadstring && fn_lua_pcallk) {
         return TRUE;
     }
     return FALSE;
@@ -1550,6 +1557,44 @@ void ExecuteAICommand(AICommand* cmd) {
             SendResult(message);
         } else {
             SendResult("Error: Missing owner_pointer parameter for CREATE_GROUP_BOX");
+        }
+    } else if (strcmp(cmd->command, "LUA_EXEC") == 0) {
+        // Execute arbitrary Lua script in CE's own Lua state (5.3, loaded from lua53-64.dll)
+        if (!InitLuaBindings()) {
+            SendResult("LUA_EXEC failed: Lua bindings not initialized");
+        } else {
+            lua_State* L = Exported.GetLuaState();
+            if (L == NULL) {
+                SendResult("LUA_EXEC failed: GetLuaState returned NULL");
+            } else {
+                int status = fn_luaL_loadstring(L, cmd->parameters);
+                if (status != 0) {
+                    const char* err = fn_lua_tolstring(L, -1, NULL);
+                    sprintf_s(message, sizeof(message), "LUA_EXEC load error: %s", err ? err : "?");
+                    SendResult(message);
+                    fn_lua_settop(L, 0);
+                } else {
+                    status = fn_lua_pcallk(L, 0, 1, 0, 0, NULL);
+                    if (status != 0) {
+                        const char* err = fn_lua_tolstring(L, -1, NULL);
+                        sprintf_s(message, sizeof(message), "LUA_EXEC runtime error: %s", err ? err : "?");
+                        SendResult(message);
+                        fn_lua_settop(L, 0);
+                    } else {
+                        // Return the single result value (string, number, boolean, or nil)
+                        const char* sval = fn_lua_tolstring(L, -1, NULL);
+                        if (sval != NULL) {
+                            sprintf_s(message, sizeof(message), "LUA_EXEC result: %s", sval);
+                            SendResult(message);
+                        } else if (fn_lua_gettop(L) > 0) {
+                            SendResult("LUA_EXEC result: (non-string value)");
+                        } else {
+                            SendResult("LUA_EXEC result: nil");
+                        }
+                        fn_lua_settop(L, 0);
+                    }
+                }
+            }
         }
     } else {
         sprintf_s(message, sizeof(message), "Unknown command: %s", cmd->command);
